@@ -1,0 +1,41 @@
+task: detection
+
+evaluator:
+  type: CocoEvaluator
+  iou_types: ['bbox', ]
+
+num_classes: 2 # your dataset classes
+remap_mscoco_category: False
+
+train_dataloader:
+  type: DataLoader
+  dataset:
+    type: CocoDetection
+    img_folder: /media/camma-monitor/Storage_postprocessing2/pose_detection/CrowdHuman/Images
+    ann_file: /media/camma-monitor/Storage_postprocessing2/pose_detection/CrowdHuman/annotations/train_monitor10k_iter2.json
+    return_masks: False
+    transforms:
+      type: Compose
+      ops: ~
+  shuffle: True
+  num_workers: 4
+  drop_last: True
+  collate_fn:
+    type: BatchImageCollateFunction
+
+
+val_dataloader:
+  type: DataLoader
+  dataset:
+    type: CocoDetection
+    img_folder: /media/camma-monitor/Storage_postprocessing2/pose_detection/CrowdHuman/Images
+    ann_file: /media/camma-monitor/Storage_postprocessing2/pose_detection/CrowdHuman/annotations/val.json
+    return_masks: False
+    transforms:
+      type: Compose
+      ops: ~
+  shuffle: False
+  num_workers: 4
+  drop_last: False
+  collate_fn:
+    type: BatchImageCollateFunction

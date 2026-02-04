@@ -1,0 +1,26 @@
+GPUS: '0'
+DATASET:
+  TRAIN_DATASET: '4dor'
+  TEST_DATASET: '4dor'
+  VIEW_IDS: [0,1,2,3,4,5]
+  SAMPLING_RANGE: [5, 20]
+  ALPHA: 0.5
+TRAIN:
+  BATCH_SIZE: 1
+  BEGIN_EPOCH: 0
+  END_EPOCH: 160
+  RESUME: False
+  CKP_PATH: ''
+  LR: 0.0001
+  LR_FACTOR: 0.1
+  LR_STEP: [120]
+  MONOPAIR: False
+  REID: False
+  GT: False
+  THRESH: 0.6
+  TRACKING: True
+TEST:
+  THRESH: 0.0
+  CKP_PATH: 'results/4dor/model_best.pth.tar'
+  REID: False
+  VIS: True
