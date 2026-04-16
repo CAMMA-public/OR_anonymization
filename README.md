@@ -7,6 +7,8 @@
 ## **Self-Supervised Uncalibrated Multi-View Video Anonymization in the Operating Room**
 Keqi Chen, [Vinkle Srivastav](https://vinkle.github.io/), Armine Vardazaryan, Cindy Rolland, Didier Mutter, Nicolas Padoy
 
+[![arXiv](https://img.shields.io/badge/arxiv-2602.02850-red)](https://arxiv.org/abs/2602.02850)
+
 ## Installation
 1. Clone this repo, and we'll call the directory that you cloned as ${ROOT_DIR}.
 2. Install dependencies. 
