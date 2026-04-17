@@ -49,6 +49,15 @@ ${ROOT_DIR}
 python ./data/generate_img_dicts.py
 ```
 
+### Trained models
+Download the trained models (P-D-DETR, Multi-View Association, and DEIM respectively) as follows for direct inference.
+
+```shell
+> wget https://s3.unistra.fr/camma_public/github/OR_anonymization/4dor_iter1.pth
+> wget https://s3.unistra.fr/camma_public/github/OR_anonymization/4dor_iter1_mva.pth.tar
+> wget https://s3.unistra.fr/camma_public/github/OR_anonymization/deim_hgnetv2_x_4dor.pth
+```
+
 ## Training
 ### 4D-OR dataset
 ```
