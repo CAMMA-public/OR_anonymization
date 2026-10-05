@@ -9,21 +9,16 @@ from torchvision.ops import nms
 import matplotlib.pyplot as plt
 import os
 
-# Metrics: precision, recall, F1, AP, AR (AR is not computable due to the inaccurate annotations)
-# We consider a prediction matched if it has overlapping region with a label
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluation")
-    # 005_CG_JPG_temp_face_partial.lmdb
-    # 005_CG_JPG_iter1_mva_tracking_bi_face.lmdb
     parser.add_argument(
-        "--pred_path", default="/media/camma-monitor/Storage_postprocessing2/pose_detection/face/005_CG_JPG_iter1_mva_tracking_bi_face_partial.lmdb", nargs='+', help="path to detections"
+        "--pred_path", default="pose_detection/face/005_CG_JPG_iter1_mva_tracking_bi_face_partial.lmdb", nargs='+', help="path to detections"
     )
     parser.add_argument(
-        "--anno_path", default='/media/camma-monitor/Storage_postprocessing2/pose_detection_utils/code/anonymization/evaluation/annotations/005_CG.json', nargs='+', help="path to images"
+        "--anno_path", default='pose_detection_utils/code/anonymization/evaluation/annotations/005_CG.json', nargs='+', help="path to images"
     )
     parser.add_argument(
-        "--img_dicts", default='/home2020/home/icube/keqichen/code/4D-OR/datasets/4D-OR/export_holistic_take2_processed/img_dicts.pkl', nargs='+', help="path to images"
+        "--img_dicts", default='datasets/4D-OR/export_holistic_take2_processed/img_dicts.pkl', nargs='+', help="path to images"
     )
     parser.add_argument(
         '--kpt_thresh',
@@ -43,67 +38,15 @@ def parse_args():
     parser.add_argument('--out_of_body', action='store_true')
 
     args, rest = parser.parse_known_args()
-
     return args
 
-def plot_pr_curve(precision_curve, recall_curve, label=None, ap_score=None):
-    """
-    Plots a Precision-Recall curve.
-
-    Args:
-        precision_curve (list or np.ndarray): A list of precision values.
-        recall_curve (list or np.ndarray): A list of recall values.
-        label (str, optional): The label for the curve in the plot legend.
-        ap_score (float, optional): The Average Precision score to display.
-    """
-    # Ensure inputs are NumPy arrays
-    precision = np.array(precision_curve)
-    recall = np.array(recall_curve)
-
-    # --- Plotting ---
-    # It's standard to plot recall on the x-axis and precision on the y-axis.
-    
-    # Method 1: A smooth line plot (good for visualization)
-    # plt.plot(recall, precision, marker='.')
-
-    # Method 2: A step plot (technically more accurate representation)
-    # The 'where='post'' argument creates the classic staircase shape.
-    # We add a starting point to make the plot begin at recall=0.
-    plt.step(np.insert(recall, 0, 0), np.insert(precision, 0, 1), where='post')
-    
-    # Fill the area under the curve for better visualization
-    plt.fill_between(np.insert(recall, 0, 0), np.insert(precision, 0, 1), step='post', alpha=0.2)
-
-    # --- Styling the Plot ---
-    plt.xlabel('Recall')
-    plt.ylabel('Precision')
-    plt.title('Precision-Recall Curve')
-    
-    # Set the limits for a standard P-R curve plot
-    plt.xlim([0.0, 1.0])
-    plt.ylim([0.0, 1.05])
-    
-    # Add a grid for easier reading
-    plt.grid(True)
-    
-    # Create the legend
-    if label is not None or ap_score is not None:
-        legend_label = f'{label}' if label else ''
-        if ap_score is not None:
-            # Use the provided AP score or calculate it if not provided
-            legend_label += f' (AP = {ap_score:.3f})'
-        plt.legend([legend_label.strip()], loc='lower left')
-
-
 def compute_iou_matrix(pred_boxes, gt_boxes):
-    """Compute IoU matrix between all predicted boxes and ground-truth boxes."""
     pred_boxes = np.array(pred_boxes)
     gt_boxes = np.array(gt_boxes)
 
     if len(pred_boxes) == 0 or len(gt_boxes) == 0:
         return np.zeros((len(pred_boxes), len(gt_boxes)))
 
-    # Compute intersection
     x1 = np.maximum(pred_boxes[:, None, 0], gt_boxes[None, :, 0])
     y1 = np.maximum(pred_boxes[:, None, 1], gt_boxes[None, :, 1])
     x2 = np.minimum(pred_boxes[:, None, 2], gt_boxes[None, :, 2])
@@ -111,80 +54,86 @@ def compute_iou_matrix(pred_boxes, gt_boxes):
 
     inter_area = np.maximum(0, x2 - x1) * np.maximum(0, y2 - y1)
 
-    # Compute union
     pred_area = (pred_boxes[:, 2] - pred_boxes[:, 0]) * (pred_boxes[:, 3] - pred_boxes[:, 1])
     gt_area = (gt_boxes[:, 2] - gt_boxes[:, 0]) * (gt_boxes[:, 3] - gt_boxes[:, 1])
 
     union_area = pred_area[:, None] + gt_area[None, :] - inter_area
-    iou_matrix = inter_area / np.clip(union_area, 1e-6, None)  # Avoid division by zero
+    iou_matrix = inter_area / np.clip(union_area, 1e-6, None)
 
     return iou_matrix
 
-def compute_tpr_at_fpr(y_true, y_pred_scores, fixed_fpr=0.05):
-    fpr, tpr, _ = roc_curve(y_true, y_pred_scores)
-    closest_index = np.argmin(np.abs(fpr - fixed_fpr))
-    return tpr[closest_index]
-
 def compute_interpolated_ap(precision_curve, recall_curve):
-    """
-    Computes the 11-point interpolated Average Precision.
-    This is the standard metric from Pascal VOC.
-
-    Args:
-        precision_curve (np.ndarray): Array of precision values.
-        recall_curve (np.ndarray): Array of recall values, assumed to be sorted.
-    """
-    # 11-point recall levels
     recall_levels = np.linspace(0, 1.0, 11)
     interpolated_precisions = []
 
     for r in recall_levels:
-        # Find all precision values where the recall is >= r
         possible_precisions = precision_curve[recall_curve >= r]
-        
-        # The interpolated precision is the maximum of these values.
-        # If there are none, the precision is 0.
         if possible_precisions.size == 0:
             interpolated_p = 0.0
         else:
             interpolated_p = np.max(possible_precisions)
-        
         interpolated_precisions.append(interpolated_p)
     
-    # AP is the average of the interpolated precisions
     ap = np.mean(interpolated_precisions)
     return ap
 
+def compute_partial_ap(precision_curve, recall_curve, min_recall=0.9):
+    """ Calculate the Area Under the PR Curve stricly from min_recall to 1.0 """
+    valid_mask = recall_curve >= min_recall
+    if not np.any(valid_mask):
+        return 0.0
+    
+    p_valid = precision_curve[valid_mask]
+    r_valid = recall_curve[valid_mask]
+    
+    if r_valid[0] > min_recall:
+        idx = np.where(recall_curve < min_recall)[0]
+        if len(idx) > 0:
+            p_boundary = precision_curve[idx[-1]]
+            r_valid = np.insert(r_valid, 0, min_recall)
+            p_valid = np.insert(p_valid, 0, p_boundary)
+        else:
+            r_valid = np.insert(r_valid, 0, min_recall)
+            p_valid = np.insert(p_valid, 0, p_valid[0])
+
+    pap = np.trapz(p_valid, r_valid) / (1.0 - min_recall)
+    return pap
+
+def get_optimal_f_metrics(precision_curve, recall_curve, confidences, tp_hard_cumsum, total_gt_boxes_hard, beta=2.0):
+    """ Find the threshold that maximizes F-beta, and return the metrics at that point """
+    if len(precision_curve) == 0:
+        return 0.0, 0.0, 0.0, 0.0, 0.0
+        
+    f_beta_curve = (1 + beta**2) * (precision_curve * recall_curve) / ((beta**2 * precision_curve) + recall_curve + 1e-8)
+    best_idx = np.argmax(f_beta_curve)
+    
+    best_f_beta = f_beta_curve[best_idx]
+    best_thresh = confidences[best_idx]
+    best_p = precision_curve[best_idx]
+    best_r = recall_curve[best_idx]
+    
+    best_hard_r = tp_hard_cumsum[best_idx] / total_gt_boxes_hard if total_gt_boxes_hard > 0 else 0.0
+    
+    return best_f_beta, best_thresh, best_p, best_r, best_hard_r
+
 
 def evaluate_multiple_images(gt_data, pred_data, iou_threshold=0.3):
-    """
-    Compute precision, recall, and AP for multiple images.
-    
-    Arguments:
-    - gt_data: dict {image_id: [list of gt_boxes]}
-    - pred_data: dict {image_id: [(pred_box, confidence)]}
-    
-    Returns:
-    - AP, Precision-Recall Curve
-    """
-
     all_confidences = []
     all_tp = []
     all_fp = []
-    total_gt_boxes = 0  # Total GT boxes across all images
+    all_tp_hard = []
+    
+    total_gt_boxes = 0 
     total_gt_boxes_hard = 0
-    tp_hard = 0
 
     for img_id in gt_data:
         gt_boxes = gt_data[img_id]
         hard_mask = gt_boxes[:, -1] > 0
-        gt_boxes_hard = gt_boxes[hard_mask]
         pred_entries = pred_data.get(img_id, [])
 
         if len(pred_entries) == 0:
-            # No predictions → all GTs are false negatives
             total_gt_boxes += len(gt_boxes)
-            total_gt_boxes_hard += len(gt_boxes_hard)
+            total_gt_boxes_hard += np.sum(hard_mask)
             continue
 
         pred_boxes, conf_scores = pred_entries
@@ -192,18 +141,18 @@ def evaluate_multiple_images(gt_data, pred_data, iou_threshold=0.3):
         conf_scores = np.array(conf_scores)
 
         total_gt_boxes += len(gt_boxes)
-        total_gt_boxes_hard += len(gt_boxes_hard)
-        sorted_indices = np.argsort(conf_scores)[::-1]  # Sort by confidence (high to low)
+        total_gt_boxes_hard += np.sum(hard_mask)
+        
+        sorted_indices = np.argsort(conf_scores)[::-1]
         pred_boxes = pred_boxes[sorted_indices]
         conf_scores = conf_scores[sorted_indices]
 
-        # Compute IoU matrix for this image
         iou_matrix = compute_iou_matrix(pred_boxes, gt_boxes)
         
-        # Match predictions to ground truth
         matched_gt = set()
         tp = np.zeros(len(pred_boxes))
         fp = np.zeros(len(pred_boxes))
+        tp_h = np.zeros(len(pred_boxes))
 
         for i, pred_box in enumerate(pred_boxes):
             ious = iou_matrix[i]
@@ -213,100 +162,80 @@ def evaluate_multiple_images(gt_data, pred_data, iou_threshold=0.3):
             if max_iou >= iou_threshold and best_match not in matched_gt:
                 tp[i] = 1
                 matched_gt.add(best_match)
+                if hard_mask[best_match]:
+                    tp_h[i] = 1
             else:
                 fp[i] = 1
 
         all_confidences.extend(conf_scores)
         all_tp.extend(tp)
         all_fp.extend(fp)
-        
-        if len(gt_boxes_hard):
-            # Compute IoU matrix of hard cases for this image
-            iou_matrix_hard = compute_iou_matrix(pred_boxes, gt_boxes_hard)
-            
-            # Match predictions to ground truth
-            matched_gt_hard = set()
-            for i, pred_box in enumerate(pred_boxes):
-                ious = iou_matrix_hard[i]
-                best_match = np.argmax(ious)
-                max_iou = ious[best_match]
+        all_tp_hard.extend(tp_h)
 
-                if max_iou >= iou_threshold and best_match not in matched_gt_hard:
-                    tp_hard += 1
-                    matched_gt_hard.add(best_match)
+    empty_metrics = {
+        'AP': 0.0, 'pAP_90': 0.0, 'R_max': 0.0, 'R_hard_max': 0.0,
+        'F2': {'score': 0, 'threshold': 0, 'precision': 0, 'recall': 0, 'hard_recall': 0},
+        'F3': {'score': 0, 'threshold': 0, 'precision': 0, 'recall': 0, 'hard_recall': 0}
+    }
 
-    if total_gt_boxes == 0:
-        return 0.0, [], []  # No GT boxes in dataset
+    if total_gt_boxes == 0 or len(all_confidences) == 0:
+        return empty_metrics
 
-    # Sort across all images based on confidence scores
     sorted_indices = np.argsort(-np.array(all_confidences))
     all_tp = np.array(all_tp)[sorted_indices]
     all_fp = np.array(all_fp)[sorted_indices]
+    all_tp_hard = np.array(all_tp_hard)[sorted_indices]
     all_confidences = np.array(all_confidences)[sorted_indices]
 
-    # Compute cumulative sums
     tp_cumsum = np.cumsum(all_tp)
     fp_cumsum = np.cumsum(all_fp)
+    tp_hard_cumsum = np.cumsum(all_tp_hard)
 
     recall_curve = tp_cumsum / total_gt_boxes
     precision_curve = tp_cumsum / (tp_cumsum + fp_cumsum)
 
-    # Compute AP using sklearn's average_precision_score
-    # ap = average_precision_score(all_tp, all_confidences)
     ap = compute_interpolated_ap(precision_curve, recall_curve)
-
-    valid_indices = np.where(precision_curve >= 0.6)[0]
-    recall_at_60_precision = max(recall_curve[valid_indices]) if len(valid_indices) > 0 else 0
     
-    valid_indices = np.where(precision_curve >= 0.9)[0]
-    recall_at_90_precision = max(recall_curve[valid_indices]) if len(valid_indices) > 0 else 0
-    
-    hard_recall = tp_hard / total_gt_boxes_hard
+    max_recall = recall_curve[-1] if len(recall_curve) else 0.0
+    max_hard_recall = tp_hard_cumsum[-1] / total_gt_boxes_hard if total_gt_boxes_hard > 0 else 0.0
 
-    return ap, precision_curve, recall_curve, recall_at_60_precision, recall_at_90_precision, hard_recall
+    pap_90 = compute_partial_ap(precision_curve, recall_curve, min_recall=0.90)
 
+    f2_score, f2_thresh, f2_p, f2_r, f2_hr = get_optimal_f_metrics(
+        precision_curve, recall_curve, all_confidences, tp_hard_cumsum, total_gt_boxes_hard, beta=2.0)
+        
+    f3_score, f3_thresh, f3_p, f3_r, f3_hr = get_optimal_f_metrics(
+        precision_curve, recall_curve, all_confidences, tp_hard_cumsum, total_gt_boxes_hard, beta=3.0)
 
+    return {
+        'AP': ap,
+        'pAP_90': pap_90,
+        'R_max': max_recall,
+        'R_hard_max': max_hard_recall,
+        'F2': {'score': f2_score, 'threshold': f2_thresh, 'precision': f2_p, 'recall': f2_r, 'hard_recall': f2_hr},
+        'F3': {'score': f3_score, 'threshold': f3_thresh, 'precision': f3_p, 'recall': f3_r, 'hard_recall': f3_hr}
+    }
 
 
 def compute_iou_vectorized(box, boxes):
-    """
-    Calculates the IoU of a single box with an array of boxes.
-    This is a vectorized implementation.
-
-    Args:
-        box (np.ndarray): A single bounding box, shape (4,) [x1, y1, x2, y2].
-        boxes (np.ndarray): An array of bounding boxes, shape (N, 4).
-
-    Returns:
-        np.ndarray: An array of IoU values, shape (N,).
-    """
-    # Coordinates of the intersection rectangles
     x1_inter = np.maximum(box[0], boxes[:, 0])
     y1_inter = np.maximum(box[1], boxes[:, 1])
     x2_inter = np.minimum(box[2], boxes[:, 2])
     y2_inter = np.minimum(box[3], boxes[:, 3])
 
-    # Width and height of intersection
     width_inter = np.maximum(0, x2_inter - x1_inter)
     height_inter = np.maximum(0, y2_inter - y1_inter)
     intersection_area = width_inter * height_inter
 
-    # Area of the individual boxes
     box_area = (box[2] - box[0]) * (box[3] - box[1])
     boxes_area = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
     
     union_area = box_area + boxes_area - intersection_area
-    
-    # Handle division by zero
     iou = intersection_area / np.maximum(union_area, 1e-8)
     return iou
 
 
 def compute_multiview_recall_curve_vectorized(gt_data, pred_data, iou_threshold=0.5):
-    """
-    Computes a recall vs. confidence curve using a vectorized IoU calculation
-    for improved performance.
-    """
     successful_detection_scores = []
     total_gt_objects = 0
 
@@ -318,30 +247,43 @@ def compute_multiview_recall_curve_vectorized(gt_data, pred_data, iou_threshold=
             is_fully_detected = True
             confidences_for_this_gt = []
 
-            for cam_name, gt_box in gt_obj_views.items():
+            for cam_name, gt_boxes in gt_obj_views.items():
                 cam_preds = pred_set.get(cam_name, [])
                 
                 if not cam_preds:
                     is_fully_detected = False
                     break
 
-                # --- Vectorized IoU Calculation ---
-                # 1. Prepare arrays for vectorized computation
                 pred_boxes_np, pred_confs_np = cam_preds
-                gt_box_np = np.array(gt_box)
+                gt_boxes_np = np.array(gt_boxes)
+                if gt_boxes_np.ndim == 1:
+                    gt_boxes_np = gt_boxes_np[None, :]
 
-                # 2. Compute all IoUs for this camera view at once
-                ious = compute_iou_vectorized(gt_box_np, pred_boxes_np)
+                num_gts = len(gt_boxes_np)
+                num_preds = len(pred_boxes_np)
+
+                if num_preds < num_gts:
+                    is_fully_detected = False
+                    break
+
+                ious = compute_iou_matrix(pred_boxes_np, gt_boxes_np)
                 
-                # 3. Find the best match
-                best_match_idx = np.argmax(ious)
-                best_iou = ious[best_match_idx]
+                matched_count = 0
+                for _ in range(num_gts):
+                    best_p, best_g = np.unravel_index(np.argmax(ious), ious.shape)
+                    max_iou = ious[best_p, best_g]
+                    
+                    if max_iou >= iou_threshold:
+                        best_pred_conf = pred_confs_np[best_p]
+                        confidences_for_this_gt.append(best_pred_conf)
+                        
+                        ious[best_p, :] = -1.0
+                        ious[:, best_g] = -1.0
+                        matched_count += 1
+                    else:
+                        break 
                 
-                if best_iou >= iou_threshold:
-                    # Get the confidence of the best matching prediction
-                    best_pred_conf = pred_confs_np[best_match_idx]
-                    confidences_for_this_gt.append(best_pred_conf)
-                else:
+                if matched_count < num_gts:
                     is_fully_detected = False
                     break
             
@@ -365,13 +307,57 @@ def compute_multiview_recall_curve_vectorized(gt_data, pred_data, iou_threshold=
 
     return confidence_thresholds, recall_curve
 
+def get_mv_recall_at_thresh(mv_thresh, mv_rec, target_thresh):
+    """ Helper to find Multi-View Recall at a specific confidence threshold """
+    if len(mv_thresh) == 0:
+        return 0.0
+    # Thresholds are sorted descending. We want where thresh >= target_thresh
+    valid_idx = np.where(mv_thresh >= target_thresh)[0]
+    if len(valid_idx) == 0:
+        return 0.0
+    # The lowest valid threshold (closest to target) gives the max recall for this criteria
+    return mv_rec[valid_idx[-1]]
+
+
+def print_metrics_report(title, metrics, mv_data=None):
+    print(f'\n================ {title} EVALUATION ================')
+    print(f"Standard AP                : {metrics['AP']:.4f}")
+    print(f"Partial AP (Recall > 90%)  : {metrics['pAP_90']:.4f}")
+    print(f"Absolute Max Recall        : {metrics['R_max']:.4f}")
+    print(f"Absolute Max Hard Recall   : {metrics['R_hard_max']:.4f}")
+    
+    if mv_data is not None:
+        mv_thresh, mv_rec = mv_data
+        abs_mv_recall = mv_rec[-1] if len(mv_rec) > 0 else 0.0
+        print(f"Absolute Max MV Recall     : {abs_mv_recall:.4f}")
+
+    print("\n  [ Optimal Point: Max F2 Score (Recall x2 weight) ]")
+    f2 = metrics['F2']
+    print(f"  -> Best F2 Score : {f2['score']:.4f}  (Threshold: {f2['threshold']:.4f})")
+    print(f"  -> Precision     : {f2['precision']:.4f}")
+    print(f"  -> Recall        : {f2['recall']:.4f}")
+    print(f"  -> Hard Recall   : {f2['hard_recall']:.4f}")
+    if mv_data is not None:
+        mv_f2 = get_mv_recall_at_thresh(mv_thresh, mv_rec, f2['threshold'])
+        print(f"  -> MV Recall     : {mv_f2:.4f}")
+
+    print("\n  [ Optimal Point: Max F3 Score (Recall x3 weight) ]")
+    f3 = metrics['F3']
+    print(f"  -> Best F3 Score : {f3['score']:.4f}  (Threshold: {f3['threshold']:.4f})")
+    print(f"  -> Precision     : {f3['precision']:.4f}")
+    print(f"  -> Recall        : {f3['recall']:.4f}")
+    print(f"  -> Hard Recall   : {f3['hard_recall']:.4f}")
+    if mv_data is not None:
+        mv_f3 = get_mv_recall_at_thresh(mv_thresh, mv_rec, f3['threshold'])
+        print(f"  -> MV Recall     : {mv_f3:.4f}")
+    print('====================================================\n')
+
 
 def evaluate(args):
     kpts_score_threshold = args.kpt_thresh
     vis_score_threshold = args.vis_thresh
     max_num_person = args.max_num_person
     
-    # prepare ground-truth data
     if isinstance(args.anno_path, str):
         anno_paths = [args.anno_path]
     else:
@@ -406,7 +392,12 @@ def evaluate(args):
     gt_fullbody_boxes_dict = {}
     gt_boxes_with_face_dict = {}
     gt_boxes_with_eyes_dict = {}
+    
+    gt_boxes_without_face_dict = {}
+    gt_boxes_without_eyes_dict = {}
+    
     pred_fullbody_boxes_dict = {}
+    
     for f_n in range(file_num):
         anno_path = anno_paths[f_n]
         pred_path = pred_paths[f_n]
@@ -423,7 +414,6 @@ def evaluate(args):
         with open(anno_path, 'r') as fp:
             gt = json.load(fp)
             
-        # Step 1: process gt labels
         for f_id in range(frame_num):
             for c_id in range(cam_num):
                 img_key = img_dicts[c_id][f_id]
@@ -439,13 +429,13 @@ def evaluate(args):
                     mv_gt_face_boxes_dict[mv_img_key] = {}
                 if mv_img_key not in mv_gt_eyes_boxes_dict:
                     mv_gt_eyes_boxes_dict[mv_img_key] = {}
-                    
+                
                 annos = gt[img_key]
                 for anno in annos:
                     box, eye1, eye2, chin, idx, is_hard = anno
                     if not len(box):
-                        print(str(f_n) + '_' + img_key)
-                    boxes.append(box)
+                        continue
+                    boxes.append(box + [is_hard])
                     boxes_face_vis.append(True)
                     boxes_eyes_vis.append(True)
                     
@@ -481,7 +471,7 @@ def evaluate(args):
                             mv_gt_face_boxes_dict[mv_img_key][idx] = {}
                         if c_id not in mv_gt_face_boxes_dict[mv_img_key][idx]:
                             mv_gt_face_boxes_dict[mv_img_key][idx][c_id] = []
-                        mv_gt_face_boxes_dict[mv_img_key][idx][c_id] = face_box
+                        mv_gt_face_boxes_dict[mv_img_key][idx][c_id].append(face_box)
                     else:
                         boxes_face_vis[-1] = False
                     
@@ -502,59 +492,70 @@ def evaluate(args):
                             mv_gt_eyes_boxes_dict[mv_img_key][idx] = {}
                         if c_id not in mv_gt_eyes_boxes_dict[mv_img_key][idx]:
                             mv_gt_eyes_boxes_dict[mv_img_key][idx][c_id] = []
-                        mv_gt_eyes_boxes_dict[mv_img_key][idx][c_id] = eyes_box
+                        mv_gt_eyes_boxes_dict[mv_img_key][idx][c_id].append(eyes_box)
                     else:
                         boxes_eyes_vis[-1] = False
                     
                 if len(boxes):
                     new_img_key = str(f_n) + '_' + str(f_id) + '_' + str(c_id)
-                    # print(boxes)
                     boxes = np.stack(boxes, axis=0)
                     boxes_face_vis = np.stack(boxes_face_vis, axis=0)
                     boxes_eyes_vis = np.stack(boxes_eyes_vis, axis=0)
+                    
                     boxes_face = boxes[boxes_face_vis]
                     boxes_eyes = boxes[boxes_eyes_vis]
                     
+                    boxes_no_face = boxes[~boxes_face_vis]
+                    boxes_no_eyes = boxes[~boxes_eyes_vis]
+                    
                     if new_img_key in gt_fullbody_boxes_dict:
-                        gt_fullbody_boxes_dict[new_img_key] += boxes
+                        gt_fullbody_boxes_dict[new_img_key] = np.concatenate([gt_fullbody_boxes_dict[new_img_key], boxes], axis=0)
                     else:
                         gt_fullbody_boxes_dict[new_img_key] = boxes
                         
                     if len(boxes_face):
                         if new_img_key in gt_boxes_with_face_dict:
-                            gt_boxes_with_face_dict[new_img_key] += boxes_face
+                            gt_boxes_with_face_dict[new_img_key] = np.concatenate([gt_boxes_with_face_dict[new_img_key], boxes_face], axis=0)
                         else:
                             gt_boxes_with_face_dict[new_img_key] = boxes_face
+                            
+                    if len(boxes_no_face):
+                        if new_img_key in gt_boxes_without_face_dict:
+                            gt_boxes_without_face_dict[new_img_key] = np.concatenate([gt_boxes_without_face_dict[new_img_key], boxes_no_face], axis=0)
+                        else:
+                            gt_boxes_without_face_dict[new_img_key] = boxes_no_face
                         
                     if len(boxes_eyes):
                         if new_img_key in gt_boxes_with_eyes_dict:
-                            gt_boxes_with_eyes_dict[new_img_key] += boxes_eyes
+                            gt_boxes_with_eyes_dict[new_img_key] = np.concatenate([gt_boxes_with_eyes_dict[new_img_key], boxes_eyes], axis=0)
                         else:
                             gt_boxes_with_eyes_dict[new_img_key] = boxes_eyes
+                            
+                    if len(boxes_no_eyes):
+                        if new_img_key in gt_boxes_without_eyes_dict:
+                            gt_boxes_without_eyes_dict[new_img_key] = np.concatenate([gt_boxes_without_eyes_dict[new_img_key], boxes_no_eyes], axis=0)
+                        else:
+                            gt_boxes_without_eyes_dict[new_img_key] = boxes_no_eyes
                 
                 if len(face_boxes):
-                    new_img_key = str(f_n) + '_' + str(f_id) + '_' + str(c_id)
                     face_boxes = np.stack(face_boxes, axis=0)
-                    # print(face_boxes)
+                    new_img_key = str(f_n) + '_' + str(f_id) + '_' + str(c_id)
                     if new_img_key in gt_face_boxes_dict:
-                        gt_face_boxes_dict[new_img_key] += face_boxes
+                        gt_face_boxes_dict[new_img_key] = np.concatenate([gt_face_boxes_dict[new_img_key], face_boxes], axis=0)
                     else:
                         gt_face_boxes_dict[new_img_key] = face_boxes
                 
                 if len(eyes_boxes):
-                    new_img_key = str(f_n) + '_' + str(f_id) + '_' + str(c_id)
                     eyes_boxes = np.stack(eyes_boxes, axis=0)
-                    # print(eyes_boxes)
+                    new_img_key = str(f_n) + '_' + str(f_id) + '_' + str(c_id)
                     if new_img_key in gt_eyes_boxes_dict:
-                        gt_eyes_boxes_dict[new_img_key] += eyes_boxes
+                        gt_eyes_boxes_dict[new_img_key] = np.concatenate([gt_eyes_boxes_dict[new_img_key], eyes_boxes], axis=0)
                     else:
                         gt_eyes_boxes_dict[new_img_key] = eyes_boxes
     
-        # prepare predictions
         using_nms = True
         env = lmdb.open(pred_path, readonly=True, lock=False, subdir=False)
         with env.begin() as txn:
-            # Use a cursor for efficient iteration if desired.
             cursor = txn.cursor()
             for f_id in range(frame_num):
                 for c_id in range(cam_num):
@@ -562,21 +563,18 @@ def evaluate(args):
                     if img_key not in gt:
                         continue
                     new_img_key = str(f_n) + '_' + str(f_id) + '_' + str(c_id)
-            
                     mv_img_key = str(f_n) + '_' + str(f_id)
+                
                     if mv_img_key not in mv_pred_face_boxes_dict:
                         mv_pred_face_boxes_dict[mv_img_key] = {}
                     if mv_img_key not in mv_pred_eyes_boxes_dict:
                         mv_pred_eyes_boxes_dict[mv_img_key] = {}
+                        
+                    gt_face_bodies = gt_boxes_with_face_dict.get(new_img_key, [])
+                    gt_no_face_bodies = gt_boxes_without_face_dict.get(new_img_key, [])
                     
-                    if new_img_key in gt_boxes_with_face_dict:
-                        gt_face_boxes = gt_boxes_with_face_dict[new_img_key]
-                    else:
-                        gt_face_boxes = []
-                    if new_img_key in gt_boxes_with_eyes_dict:
-                        gt_eyes_boxes = gt_boxes_with_eyes_dict[new_img_key]
-                    else:
-                        gt_eyes_boxes = []
+                    gt_eyes_bodies = gt_boxes_with_eyes_dict.get(new_img_key, [])
+                    gt_no_eyes_bodies = gt_boxes_without_eyes_dict.get(new_img_key, [])
                     
                     anno_key = str(f_id) + '_' + str(c_id)
                     key_kpts = f"{anno_key}/kpts".encode('utf-8')
@@ -584,23 +582,19 @@ def evaluate(args):
                     key_kpts_vis = f"{anno_key}/kpts_vis".encode('utf-8')
                     key_boxes = f"{anno_key}/boxes".encode('utf-8')
                     key_boxes_scores = f"{anno_key}/boxes_scores".encode('utf-8')
-                    # key_kpts_scores = f"{anno_key}/scores".encode('utf-8')
-                    key_matching_scores = f"{anno_key}/matching_scores".encode('utf-8')
                     
                     kpts_data = txn.get(key_kpts)
                     kpts_scores_data = txn.get(key_kpts_scores)
                     kpts_vis_data = txn.get(key_kpts_vis)
                     boxes_data = txn.get(key_boxes)
                     boxes_scores_data = txn.get(key_boxes_scores)
-                    matching_scores_data = txn.get(key_matching_scores)
+                    
                     if boxes_data is not None:
-                        # Deserialize using pickle.
                         kpts = pickle.loads(kpts_data)
                         kpts_scores = pickle.loads(kpts_scores_data)
                         kpts_vis = pickle.loads(kpts_vis_data)
                         boxes = pickle.loads(boxes_data)
                         boxes_scores = pickle.loads(boxes_scores_data)
-                        # matching_scores = pickle.loads(matching_scores_data)
                         
                         if args.out_of_body:
                             for k in range(len(boxes)):
@@ -608,7 +602,7 @@ def evaluate(args):
                                     if kpts[k][q][0] < boxes[k][0] or kpts[k][q][0] > boxes[k][2] or kpts[k][q][1] < boxes[k][1] or kpts[k][q][1] > boxes[k][3]:
                                         kpts_scores[k][q] = 0.
                         
-                        sorted_indices = np.argsort(boxes_scores)[::-1]  # Sort by confidence (high to low)
+                        sorted_indices = np.argsort(boxes_scores)[::-1] 
                         kpts = kpts[sorted_indices]
                         kpts_scores = kpts_scores[sorted_indices]
                         kpts_vis = kpts_vis[sorted_indices]
@@ -617,49 +611,35 @@ def evaluate(args):
                         
                         if len(boxes):
                             if using_nms:
-                                # indices = face_score > kpts_score_threshold
                                 torch_boxes = torch.from_numpy(boxes).float()
                                 torch_boxes_scores = torch.from_numpy(boxes_scores).float()
-                                indices = nms(torch_boxes, torch_boxes_scores, 0.7)[:max_num_person]
-                                nms_boxes = torch_boxes[indices].numpy()
-                                nms_boxes_scores = torch_boxes_scores[indices].numpy()
-                            # indices = face_score > kpts_score_threshold
-                            # face_boxes = face_boxes[indices]
-                            # face_score = face_score[indices]
-                            if len(nms_boxes):
-                                pred_fullbody_boxes_dict[new_img_key] = [nms_boxes, nms_boxes_scores]
+                                indices = nms(torch_boxes, torch_boxes_scores, 0.7)[:max_num_person].numpy()
+                                
+                                boxes = torch_boxes[indices].numpy()
+                                boxes_scores = torch_boxes_scores[indices].numpy()
+                                
+                                kpts = kpts[indices]
+                                kpts_scores = kpts_scores[indices]
+                                kpts_vis = kpts_vis[indices]
+                                
+                            if len(boxes):
+                                pred_fullbody_boxes_dict[new_img_key] = [boxes, boxes_scores]
                         
-                        if len(gt_face_boxes):
-                            # Compute IoU matrix for this image
-                            iou_matrix = compute_iou_matrix(boxes, gt_face_boxes)
-                            # Match predictions to ground truth
-                            matched_gt = set()
-                            face_mask = np.zeros(len(boxes), dtype=bool)
-                            for i, box in enumerate(boxes):
-                                ious = iou_matrix[i]
-                                best_match = np.argmax(ious)
-                                max_iou = ious[best_match]
-
-                                if max_iou >= 0.1:# and best_match not in matched_gt:
-                                    face_mask[i] = True
-                                    matched_gt.add(best_match)
-                            
-                            boxes_with_face = boxes[face_mask]
-                            kpts_with_face = kpts[face_mask]
-                            kpts_scores_with_face = kpts_scores[face_mask]
-                            kpts_vis_with_face = kpts_vis[face_mask]
-                            
+                        if len(kpts) > 0:
                             face_boxes = []
                             face_scores = []
-                            for one_face_kpts, one_face_kpts_scores, one_face_kpts_vis in zip(kpts_with_face, kpts_scores_with_face, kpts_vis_with_face):
+                            
+                            for one_face_kpts, one_face_kpts_scores, one_face_kpts_vis in zip(kpts, kpts_scores, kpts_vis):
                                 mask = (one_face_kpts_scores > kpts_score_threshold) & (one_face_kpts_vis > vis_score_threshold)
                                 new_face_kpts = one_face_kpts[mask]
                                 new_face_kpts_scores = one_face_kpts_scores[mask]
+                                
                                 if len(new_face_kpts):
                                     min_xy = np.min(new_face_kpts, axis=0)
                                     max_xy = np.max(new_face_kpts, axis=0)
                                     center_x = (min_xy[0] + max_xy[0]) * 0.5
                                     center_y = (min_xy[1] + max_xy[1]) * 0.5
+                                    
                                     x1 = center_x - pseudo_face_width * 0.5
                                     y1 = center_y - pseudo_face_height * 0.5
                                     x2 = center_x + pseudo_face_width * 0.5
@@ -672,47 +652,63 @@ def evaluate(args):
                             if len(face_boxes):
                                 face_boxes = np.stack(face_boxes, axis=0)
                                 face_scores = np.array(face_scores)
+                                
                                 if using_nms:
-                                    face_boxes = torch.from_numpy(face_boxes).float()
-                                    face_scores = torch.from_numpy(face_scores).float()
-                                    indices = nms(face_boxes, face_scores, 0.6)[:max_num_person]
-                                    face_boxes = face_boxes[indices].numpy()
-                                    face_scores = face_scores[indices].numpy()
-                                if len(face_boxes):
-                                    pred_face_boxes_dict[new_img_key] = [face_boxes, face_scores]
-                                    mv_pred_face_boxes_dict[mv_img_key][c_id] = [face_boxes, face_scores]
+                                    face_boxes_t = torch.from_numpy(face_boxes).float()
+                                    face_scores_t = torch.from_numpy(face_scores).float()
+                                    indices = nms(face_boxes_t, face_scores_t, 0.6)[:max_num_person].numpy()
+                                    face_boxes = face_boxes[indices]
+                                    face_scores = face_scores[indices]
+                                    
+                                final_face_boxes = []
+                                final_face_scores = []
+                                claimed_ignore_face_bodies = set() 
+                                
+                                for i, face_box in enumerate(face_boxes):
+                                    center_x = (face_box[0] + face_box[2]) * 0.5
+                                    center_y = (face_box[1] + face_box[3]) * 0.5
+                                    
+                                    in_valid_body = False
+                                    in_ignore_body = False
+                                    
+                                    for gt_b in gt_face_bodies:
+                                        if center_x >= gt_b[0]-10 and center_x <= gt_b[2]+10 and center_y >= gt_b[1]-10 and center_y <= gt_b[3]+10:
+                                            in_valid_body = True
+                                            break
+                                    
+                                    if not in_valid_body:
+                                        for idx, gt_b in enumerate(gt_no_face_bodies):
+                                            if center_x >= gt_b[0]-10 and center_x <= gt_b[2]+10 and center_y >= gt_b[1]-10 and center_y <= gt_b[3]+10:
+                                                if idx not in claimed_ignore_face_bodies:
+                                                    in_ignore_body = True
+                                                    claimed_ignore_face_bodies.add(idx)
+                                                    break
+                                                    
+                                    if not in_ignore_body:
+                                        final_face_boxes.append(face_box)
+                                        final_face_scores.append(face_scores[i])
+                                        
+                                if len(final_face_boxes):
+                                    final_face_boxes = np.array(final_face_boxes)
+                                    final_face_scores = np.array(final_face_scores)
+                                    pred_face_boxes_dict[new_img_key] = [final_face_boxes, final_face_scores]
+                                    mv_pred_face_boxes_dict[mv_img_key][c_id] = [final_face_boxes, final_face_scores]
                         
-                        if len(gt_eyes_boxes):
-                            # Compute IoU matrix for this image
-                            iou_matrix = compute_iou_matrix(boxes, gt_eyes_boxes)
-                            # Match predictions to ground truth
-                            matched_gt = set()
-                            eyes_mask = np.zeros(len(boxes), dtype=bool)
-                            for i, box in enumerate(boxes):
-                                ious = iou_matrix[i]
-                                best_match = np.argmax(ious)
-                                max_iou = ious[best_match]
-
-                                if max_iou >= 0.1:# and best_match not in matched_gt:
-                                    eyes_mask[i] = True
-                                    matched_gt.add(best_match)
-                            
-                            boxes_with_eyes = boxes[eyes_mask]
-                            kpts_with_eyes = kpts[eyes_mask]
-                            kpts_scores_with_eyes = kpts_scores[eyes_mask]
-                            kpts_vis_with_eyes = kpts_vis[eyes_mask]
-                            
+                        if len(kpts) > 0:
                             eyes_boxes = []
                             eyes_scores = []
-                            for one_eyes_kpts, one_eyes_kpts_scores, one_eyes_kpts_vis in zip(kpts_with_eyes[:, :2], kpts_scores_with_eyes[:, :2], kpts_vis_with_eyes[:, :2]):
+                            
+                            for one_eyes_kpts, one_eyes_kpts_scores, one_eyes_kpts_vis in zip(kpts[:, :2], kpts_scores[:, :2], kpts_vis[:, :2]):
                                 mask = (one_eyes_kpts_scores > kpts_score_threshold) & (one_eyes_kpts_vis > vis_score_threshold)
                                 new_eyes_kpts = one_eyes_kpts[mask]
                                 new_eyes_kpts_scores = one_eyes_kpts_scores[mask]
+                                
                                 if len(new_eyes_kpts):
                                     min_xy = np.min(new_eyes_kpts, axis=0)
                                     max_xy = np.max(new_eyes_kpts, axis=0)
                                     center_x = (min_xy[0] + max_xy[0]) * 0.5
                                     center_y = (min_xy[1] + max_xy[1]) * 0.5
+                                    
                                     x1 = center_x - pseudo_eyes_width * 0.5
                                     y1 = center_y - pseudo_eyes_height * 0.5
                                     x2 = center_x + pseudo_eyes_width * 0.5
@@ -725,50 +721,62 @@ def evaluate(args):
                             if len(eyes_boxes):
                                 eyes_boxes = np.stack(eyes_boxes, axis=0)
                                 eyes_scores = np.array(eyes_scores)
+                                
                                 if using_nms:
-                                    eyes_boxes = torch.from_numpy(eyes_boxes).float()
-                                    eyes_scores = torch.from_numpy(eyes_scores).float()
-                                    indices = nms(eyes_boxes, eyes_scores, 0.6)[:max_num_person]
-                                    eyes_boxes = eyes_boxes[indices].numpy()
-                                    eyes_scores = eyes_scores[indices].numpy()
-                                if len(eyes_boxes):
-                                    pred_eyes_boxes_dict[new_img_key] = [eyes_boxes, eyes_scores]
-                                    mv_pred_eyes_boxes_dict[mv_img_key][c_id] = [eyes_boxes, eyes_scores]
-        env.close()
+                                    eyes_boxes_t = torch.from_numpy(eyes_boxes).float()
+                                    eyes_scores_t = torch.from_numpy(eyes_scores).float()
+                                    indices = nms(eyes_boxes_t, eyes_scores_t, 0.6)[:max_num_person].numpy()
+                                    eyes_boxes = eyes_boxes[indices]
+                                    eyes_scores = eyes_scores[indices]
+                                    
+                                final_eyes_boxes = []
+                                final_eyes_scores = []
+                                claimed_ignore_eyes_bodies = set()
+                                
+                                for i, eyes_box in enumerate(eyes_boxes):
+                                    center_x = (eyes_box[0] + eyes_box[2]) * 0.5
+                                    center_y = (eyes_box[1] + eyes_box[3]) * 0.5
+                                    
+                                    in_valid_body = False
+                                    in_ignore_body = False
+                                    
+                                    for gt_b in gt_eyes_bodies:
+                                        if center_x >= gt_b[0]-10 and center_x <= gt_b[2]+10 and center_y >= gt_b[1]-10 and center_y <= gt_b[3]+10:
+                                            in_valid_body = True
+                                            break
+                                            
+                                    if not in_valid_body:
+                                        for idx, gt_b in enumerate(gt_no_eyes_bodies):
+                                            if center_x >= gt_b[0]-10 and center_x <= gt_b[2]+10 and center_y >= gt_b[1]-10 and center_y <= gt_b[3]+10:
+                                                if idx not in claimed_ignore_eyes_bodies:
+                                                    in_ignore_body = True
+                                                    claimed_ignore_eyes_bodies.add(idx)
+                                                    break
+                                                    
+                                    if not in_ignore_body:
+                                        final_eyes_boxes.append(eyes_box)
+                                        final_eyes_scores.append(eyes_scores[i])
+                                        
+                                if len(final_eyes_boxes):
+                                    final_eyes_boxes = np.array(final_eyes_boxes)
+                                    final_eyes_scores = np.array(final_eyes_scores)
+                                    pred_eyes_boxes_dict[new_img_key] = [final_eyes_boxes, final_eyes_scores]
+                                    mv_pred_eyes_boxes_dict[mv_img_key][c_id] = [final_eyes_boxes, final_eyes_scores]
     
-    ap, precision_curve, recall_curve, recall_at_60_precision, recall_at_90_precision, hard_recall = evaluate_multiple_images(gt_fullbody_boxes_dict, pred_fullbody_boxes_dict, 0.5)
-    print('Full body')
-    print(f'Precision: {precision_curve[-1]}')
-    print(f'Recall: {recall_curve[-1]}')
-    print(f'Average Precision: {ap}')
-    print(f'Hard Case Recall: {hard_recall}')
-    # print(f'Recall at 60 precision: {recall_at_60_precision}')
-    # print(f'Recall at 90 precision: {recall_at_90_precision}')
-    
-    ap, precision_curve, recall_curve, recall_at_60_precision, recall_at_90_precision, hard_recall = evaluate_multiple_images(gt_face_boxes_dict, pred_face_boxes_dict)
-    mv_thresholds, mv_recall = compute_multiview_recall_curve_vectorized(mv_gt_face_boxes_dict, mv_pred_face_boxes_dict, iou_threshold=0.3)
-    print('Face')
-    print(f'Precision: {precision_curve[-1]}')
-    print(f'Recall: {recall_curve[-1]}')
-    print(f'Average Precision: {ap}')
-    print(f'Hard Case Recall: {hard_recall}')
-    # print(f'Recall at 60 precision: {recall_at_60_precision}')
-    # print(f'Recall at 90 precision: {recall_at_90_precision}')
-    print(f'Multi-view recall: {mv_recall[-1]}')
 
-    ap, precision_curve, recall_curve, recall_at_60_precision, recall_at_90_precision, hard_recall = evaluate_multiple_images(gt_eyes_boxes_dict, pred_eyes_boxes_dict)
-    mv_thresholds, mv_recall = compute_multiview_recall_curve_vectorized(mv_gt_eyes_boxes_dict, mv_pred_eyes_boxes_dict, iou_threshold=0.3)
-    print('Eyes')
-    print(f'Precision: {precision_curve[-1]}')
-    print(f'Recall: {recall_curve[-1]}')
-    print(f'Average Precision: {ap}')
-    print(f'Hard Case Recall: {hard_recall}')
-    # print(f'Recall at 60 precision: {recall_at_60_precision}')
-    # print(f'Recall at 90 precision: {recall_at_90_precision}')
-    print(f'Multi-view recall: {mv_recall[-1]}')
+    # ---------------- EVALUATION & PRINTING ----------------
 
+    fullbody_metrics = evaluate_multiple_images(gt_fullbody_boxes_dict, pred_fullbody_boxes_dict, 0.5)
+    print_metrics_report('FULL BODY', fullbody_metrics)
+
+    face_metrics = evaluate_multiple_images(gt_face_boxes_dict, pred_face_boxes_dict)
+    mv_face_data = compute_multiview_recall_curve_vectorized(mv_gt_face_boxes_dict, mv_pred_face_boxes_dict, iou_threshold=0.3)
+    print_metrics_report('FACE', face_metrics, mv_face_data)
+
+    eyes_metrics = evaluate_multiple_images(gt_eyes_boxes_dict, pred_eyes_boxes_dict)
+    mv_eyes_data = compute_multiview_recall_curve_vectorized(mv_gt_eyes_boxes_dict, mv_pred_eyes_boxes_dict, iou_threshold=0.3)
+    print_metrics_report('EYES', eyes_metrics, mv_eyes_data)
 
 if __name__ == '__main__':
     args = parse_args()
-
     evaluate(args)
