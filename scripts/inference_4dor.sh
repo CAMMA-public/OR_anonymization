@@ -15,8 +15,7 @@ device=$4
 # --- 2. Use Absolute Paths & Define Variables for Clarity (Best Practice) ---
 # Using variables for long paths makes the command block much cleaner.
 CONDA_PYTHON="~/miniconda3/envs/anonymization/bin/python3"
-PROJECT_ROOT="OR_anonymization"
-MODEL_WEIGHT="weights/4dor_iter1.pth"
+MODEL_WEIGHT="weights/4dor_sam3.pth"
 
 # Define expected file paths based on the pipeline logic
 DETECTION_NAME="${save_name}.lmdb"
@@ -37,23 +36,29 @@ echo "GPU Device: ${device}"
 echo "Output from both tasks will be saved to ${LOG_FILE}"
 echo "You can monitor the progress with: tail -f ${LOG_FILE}"
 
+# '${CONDA_PYTHON}' inference_lmdb_4dor.py --num_queries 1000 --epochs 50 --enc_layers 6 --dec_layers 6 \
+#        --with_box_refine  --lr_drop 40 --batch_size 1 --aps 1       \
+#        --output_dir aps_swinl --backbone swin-l --use_checkpoint \
+#        --root_dir '${root_dir}' \
+#        --save_dir '${save_dir}' \
+#        --save_name '${DETECTION_NAME}' \
+#        --weight '${MODEL_WEIGHT}' && \
+
 # --- The Corrected Sequential Command ---
 # We use bash -c to group the commands together for nohup.
 # The '&&' ensures the second command only runs if the first succeeds.
 nohup bash -c ' \
     echo "--- Starting full-body detection ---" && \
-    cd '${PROJECT_ROOT}/detector' && \
+    cd 'detector' && \
     \
-    '${CONDA_PYTHON}' inference_lmdb_4dor.py --num_queries 1000 --epochs 50 --enc_layers 6 --dec_layers 6 \
-       --with_box_refine  --lr_drop 40 --batch_size 1 --aps 1       \
-       --output_dir aps_swinl --backbone swin-l --use_checkpoint \
+    '${CONDA_PYTHON}' -u inference_lmdb_4dor.py -c configs/deim_dfine/deim_hgnetv2_x_4dor.yml \
+       -r '${MODEL_WEIGHT}' \
        --root_dir '${root_dir}' \
        --save_dir '${save_dir}' \
-       --save_name '${DETECTION_NAME}' \
-       --weight '${MODEL_WEIGHT}' && \
+       --save_name '${DETECTION_NAME}' && \
     \
     echo "--- Starting tracking ---" && \
-    cd '${PROJECT_ROOT}/mva' && \
+    cd '../mva' && \
     \
     '${CONDA_PYTHON}' ssl/tracking_lmdb_4dor.py --path '${DETECTION_PATH}' \
        --save_dir '${save_dir}' \
@@ -73,7 +78,7 @@ nohup bash -c ' \
        --root_dir '${root_dir}' && \
     \
     echo "--- Starting pose estimation ---" && \
-    cd '${PROJECT_ROOT}/mmpose' && \
+    cd '../mmpose' && \
     \
     '${CONDA_PYTHON}' pipeline_lmdb_4dor.py \
     configs/wholebody_2d_keypoint/rtmpose/cocktail14/rtmw-l_8xb320-270e_cocktail14-384x288.py \

@@ -15,7 +15,6 @@ device=$4
 # --- 2. Use Absolute Paths & Define Variables for Clarity (Best Practice) ---
 # Using variables for long paths makes the command block much cleaner.
 CONDA_PYTHON="~/miniconda3/envs/anonymization/bin/python3"
-PROJECT_ROOT="OR_anonymization"
 
 export CUDA_HOME=/usr/local/cuda-11.8
 export CUDA_VISIBLE_DEVICES=$device
@@ -28,12 +27,17 @@ echo "GPU Device: ${device}"
 echo "Output from both tasks will be saved to ${LOG_FILE}"
 echo "You can monitor the progress with: tail -f ${LOG_FILE}"
 
+# '${CONDA_PYTHON}' main.py \
+#     --num_queries 1000 --epochs 20 --enc_layers 6 --dec_layers 6 \
+#     --with_box_refine  --lr_drop 10 --batch_size 1 --aps 1       \
+#     --output_dir aps_swinl_4dor --backbone swin-l --use_checkpoint && \
+
 # --- The Corrected Sequential Command ---
 # We use bash -c to group the commands together for nohup.
 # The '&&' ensures the second command only runs if the first succeeds.
 nohup bash -c ' \
     echo "--- Generate pseudo labels for fine-tuning detector ---" && \
-    cd '${PROJECT_ROOT}/detector' && \
+    cd 'detector' && \
     \
     '${CONDA_PYTHON}' generate_pseudo_labels_4dor.py \
        --pred_path '${pred_path}' \
@@ -46,15 +50,14 @@ nohup bash -c ' \
     \
     echo "--- Fine-tuning full-body detector ---" && \
     \
-    '${CONDA_PYTHON}' main.py \
-    --num_queries 1000 --epochs 20 --enc_layers 6 --dec_layers 6 \
-    --with_box_refine  --lr_drop 10 --batch_size 1 --aps 1       \
-    --output_dir aps_swinl_4dor --backbone swin-l --use_checkpoint && \
+    '${CONDA_PYTHON}' -m torch.distributed.launch --nproc_per_node=4 --master_port 13630 train.py \
+    -c configs/deim_dfine/deim_hgnetv2_x_4dor.yml \
+    --use-amp --seed=0 && \
     \
-    cd '${PROJECT_ROOT}/mva' && \
+    cd '../mva' && \
     \
     echo "--- Training multi-view association model ---" && \
-    '${CONDA_PYTHON}' ssl/main.py --cfg configs/4dor_iter1.yaml && \
+    '${CONDA_PYTHON}' ssl/main.py --cfg configs/4dor_sam3.yaml && \
     \
     echo "--- All tasks completed successfully. ---" \
 ' > ${LOG_FILE} 2>&1 &

@@ -94,6 +94,9 @@ def main():
         "--root_dir", default='/media/camma-monitor/Storage_postprocessing2/006_RS_JPG/006_RS', type=str, help="path to images"
     )
     parser.add_argument(
+        "--save_suffix", default=".lmdb", type=str, help="path to output"
+    )
+    parser.add_argument(
         '--device', default='cuda:0', help='Device used for inference')
     parser.add_argument(
         '--det-cat-id',
@@ -150,10 +153,10 @@ def main():
     base_name = args.path.rsplit(os.sep, 1)[1].rsplit('.', 1)[0]
     pose_dir = os.path.join(args.save_dir, 'pose')
     os.makedirs(pose_dir, exist_ok=True)
-    pose_path = os.path.join(pose_dir, base_name + '_pose.lmdb')
+    pose_path = os.path.join(pose_dir, base_name + '_pose' + args.save_suffix)
     face_dir = os.path.join(args.save_dir, 'face')
     os.makedirs(face_dir, exist_ok=True)
-    face_path = os.path.join(face_dir, base_name + '_face.lmdb')
+    face_path = os.path.join(face_dir, base_name + '_face' + args.save_suffix)
     
     print(face_path, flush=True)
     
